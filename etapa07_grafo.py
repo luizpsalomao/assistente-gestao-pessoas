@@ -331,13 +331,37 @@ def aprovacao_chefia(estado: Estado) -> dict:
     #   Rejeitado -> {"rejeicoes": +1, "feedback_chefia": motivo, "aprovador": ...}
     #   NADA de gravar antes do interrupt(): na retomada, o nó roda de novo desde o começo.
     #   Referência: aula7/exemplos/07_aprovacao_revisao/main.py
-    raise NotImplementedError("ETAPA 8.2: aprovacao_chefia")
+    # Este print vem ANTES do interrupt(): ele aparece na 1ª execução E de novo na retomada (o nó roda desde o início).
+    # Por isso aqui só pode haver coisas sem efeito colateral (imprimir, montar texto) -- nunca gravar ou notificar.
+    print(f"   [chefia] aprovacao_chefia rodou (rejeições até agora: {estado.get('rejeicoes', 0)})")
+    resposta = interrupt({
+        "pergunta": "Aprova o despacho?",
+        "chefia": estado["servidor"].get("chefia"),
+        "resumo": {
+            "servidor": {k: estado["servidor"].get(k) for k in ("matricula", "nome", "equipe")},
+            "pedido": estado["pedido"],
+            "periodo": {k: estado["periodo"].get(k) for k in ("inicio", "fim", "dias_corridos", "dias_uteis", "retorno")},
+            "parecer_normas": estado.get("parecer_normas"),
+            "parecer_escala": estado.get("parecer_escala"),
+            "parecer_financeiro": estado.get("parecer_financeiro"),
+            "despacho_proposto": estado.get("despacho"),
+        },
+    })
+    # daqui para baixo só roda na RETOMADA, com o que o retomar() entregou em Command(resume=...)
+    if resposta.get("aprovado"):
+        return {"aprovador": resposta.get("aprovador"), "feedback_chefia": "", "caminho": ["aprovacao_chefia"]}
+    return {"rejeicoes": estado.get("rejeicoes", 0) + 1, "feedback_chefia": resposta.get("motivo", ""),
+            "aprovador": resposta.get("aprovador"), "tentativas": 0, "caminho": ["aprovacao_chefia"]}
 
 
 def rotear_chefia(estado: Estado) -> str:
     # ETAPA 8.3 -- aprovado -> "registrar"; rejeitado e rejeicoes < MAX_REJEICOES -> "redigir";
     #              rejeitado de novo -> "registrar" (com decisao "indeferido_pela_chefia": ajuste no registrar)
-    raise NotImplementedError("ETAPA 8.3: rotear_chefia")
+    if not estado.get("feedback_chefia"):          # aprovado (o nó limpa o feedback quando aprova)
+        return "registrar"
+    if estado.get("rejeicoes", 0) < MAX_REJEICOES:  # rejeitado: o Redator refaz levando o motivo em conta
+        return "redigir"
+    return "registrar"                              # 2ª rejeição: o registrar grava "indeferido_pela_chefia"
 
 
 # ------------------------------------------------------------------ ETAPA 7.5 / 9.4: registrar
@@ -406,9 +430,13 @@ def construir(checkpointer=None):
     construtor.add_edge(["normas", "escala", "financeiro"], "consolidar")
     construtor.add_edge("consolidar", "redigir_despacho")
     construtor.add_edge("redigir_despacho", "validar")
-    # ciclo: validar volta a redigir (máx. MAX_TENTATIVAS). Até a Etapa 8, "chefia" vai direto para registrar.
+    # ciclo: validar volta a redigir (máx. MAX_TENTATIVAS); depois, chefia (N8) ou direto para registrar
     construtor.add_conditional_edges("validar", rotear_validacao, {"redigir": "redigir_despacho",
-                                                                   "chefia": "registrar", "registrar": "registrar"})
+                                                                   "chefia": "aprovacao_chefia",
+                                                                   "registrar": "registrar"})
+    # ciclo da chefia: rejeitou -> redige de novo com o motivo (máx. MAX_REJEICOES); aprovou -> registrar
+    construtor.add_conditional_edges("aprovacao_chefia", rotear_chefia, {"redigir": "redigir_despacho",
+                                                                         "registrar": "registrar"})
     for fim in ("recusar", "pedir_dados", "registrar"):
         construtor.add_edge(fim, END)
     return construtor.compile(checkpointer=checkpointer)
@@ -463,7 +491,20 @@ def retomar(app, thread_id: str, resposta: str, quem: str) -> None:
     #   saida = app.invoke(Command(resume=valor), config_de(thread_id)); mostrar(app, thread_id, saida)
     #   Nada pausado? Diga isso e não faça nada (e se retomarem duas vezes?).
     #   Referência: aula7/exemplos/06_human_in_the_loop/main.py (retomar)
-    raise NotImplementedError("ETAPA 8.4: retomar")
+    config = config_de(thread_id)
+    parado_em = app.get_state(config).next  # onde a execução está pausada (vazio = terminou ou nunca rodou)
+    if "aprovacao_chefia" in parado_em:
+        aprovado = resposta.strip().lower() == "sim"
+        motivo = "" if aprovado else resposta.split(":", 1)[1].strip() if ":" in resposta else "rejeitado"
+        valor = {"aprovado": aprovado, "aprovador": quem, "motivo": motivo}
+    elif "triagem_humana" in parado_em:  # 🆕 C (opcional)
+        valor = {"segue": resposta.strip().lower().startswith("sim"),
+                 "orientacao": resposta.split(":", 1)[1].strip() if ":" in resposta else "", "quem": quem}
+    else:
+        print(f"[{thread_id}] nada pausado")
+        return
+    saida = app.invoke(Command(resume=valor), config)
+    mostrar(app, thread_id, saida)
 
 
 def main() -> None:
