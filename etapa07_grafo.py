@@ -376,6 +376,10 @@ def registrar(estado: Estado) -> dict:
     if estado.get("rejeicoes", 0) >= MAX_REJEICOES:
         decisao = "indeferido_pela_chefia"
     protocolo = gerar_protocolo(pedido["matricula"], pedido["tipo"], pedido["data_inicio"], pedido["data_fim"])
+    # ETAPA 9.4 -- guardrail de SAÍDA (N10): despacho com CPF/CID não sai daqui, nem chega ao server
+    if encontrar_dado_sensivel(estado["despacho"]):
+        print("   [registrar] guardrail de saída: o despacho tem CPF/CID (N10), nada foi gravado")
+        return {"protocolo": protocolo, "resultado": "bloqueado_na_saida", "caminho": ["registrar"]}
     registro = chamar_mcp("registrar_decisao", {
         "protocolo": protocolo, "matricula": pedido["matricula"], "tipo": pedido["tipo"],
         "inicio": pedido["data_inicio"], "fim": pedido["data_fim"], "decisao": decisao,
@@ -383,7 +387,7 @@ def registrar(estado: Estado) -> dict:
         "token": os.getenv("TOKEN_REGISTRO", ""), "thread_id": estado["thread_id"]})
     if not registro.get("sucesso"):
         print(f"   [registrar] negado pelo server: {registro.get('erro')}")
-        resultado = "negado_pelo_server"
+        resultado = f"negado_pelo_server: {registro.get('erro')}"
     else:
         resultado = "duplicado" if registro.get("duplicado") else "registrado"
     return {"protocolo": protocolo, "decisao": decisao, "resultado": resultado, "caminho": ["registrar"]}

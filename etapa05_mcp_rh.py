@@ -138,8 +138,18 @@ def _auditar(protocolo: str, decisao_acesso: str, motivo: str, parametros: dict)
     #   thread_id, quem pediu (aprovador), tool ("registrar_decisao"), protocolo, decisao_acesso ("ALLOW"/"DENY"),
     #   motivo e os parâmetros (SEM o token e SEM o despacho inteiro).
     #   Referência: aula5/exemplos/10_seguranca/server_seguro.py (_registrar_auditoria), aqui em JSON Lines.
-    #   Até fazer a 9.3, este pass deixa a escrita funcionar sem auditoria.
-    pass
+    linha = {
+        "quando": datetime.now().isoformat(),
+        "thread_id": parametros.get("thread_id", ""),
+        "quem": parametros.get("aprovador", ""),
+        "tool": "registrar_decisao",
+        "protocolo": protocolo,
+        "decisao_acesso": decisao_acesso,
+        "motivo": motivo,
+        "parametros": parametros,  # já vem SEM o token e SEM o despacho (ver registrar_decisao)
+    }
+    with open(ARQUIVO_AUDITORIA, "a", encoding="utf-8") as arquivo:
+        arquivo.write(json.dumps(linha, ensure_ascii=False) + "\n")
 
 
 @mcp.tool()
@@ -178,11 +188,29 @@ def registrar_decisao(protocolo: str, matricula: str, tipo: str, inicio: str, fi
     #   Protocolo já existe -> NÃO grave de novo; devolva {"sucesso": True, "duplicado": True, ...}.
     #   Senão grave {**parametros, "despacho": despacho, "registrado_em": ...} e devolva {"sucesso": True, ...}.
     #   Audite com ALLOW (9.3).
+    def negar(motivo: str) -> dict:
+        _auditar(protocolo, "DENY", motivo, parametros)
+        return {"sucesso": False, "erro": motivo}
+
+    if not TOKEN_REGISTRO or token != TOKEN_REGISTRO:
+        return negar("token inválido")
+    if decisao not in DECISOES_VALIDAS:
+        return negar(f"decisão inválida: {decisao!r} (use {', '.join(sorted(DECISOES_VALIDAS))})")
+    if aprovador == matricula:
+        return negar("autoaprovação (N8)")
+    if decisao == "deferido" and tipo in TIPOS_COM_CHEFIA:
+        servidor = carregar_servidores().get(matricula)
+        chefia = servidor["chefia"] if servidor else None
+        if aprovador != chefia:
+            return negar(f"aprovador não é a chefia {chefia} (N8)")
+
     registros = _ler_registros()
     if protocolo in registros:  # idempotência: o mesmo pedido não é gravado duas vezes
+        _auditar(protocolo, "ALLOW", "duplicado", parametros)
         return {"sucesso": True, "duplicado": True, "protocolo": protocolo}
     registros[protocolo] = {**parametros, "despacho": despacho, "registrado_em": datetime.now().isoformat()}
     _gravar_registros(registros)
+    _auditar(protocolo, "ALLOW", "gravado", parametros)
     return {"sucesso": True, "protocolo": protocolo}
 
 
