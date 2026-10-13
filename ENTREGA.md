@@ -1,6 +1,6 @@
 # Entrega: Assistente de Gestão de Pessoas
 
-**Aluno(s):**
+**Aluno(s):** Luiz Eduardo Paes Salomão
 **Até onde chegou:** ( ) Marco mínimo (Etapa 6)  ( ) Marco completo (Etapa 9)  ( ) Etapas 10–11
 **Opcionais e bônus feitos:** ( ) 🆕 A  ( ) 🆕 B  ( ) 🆕 C  ( ) Outro: ______
 
@@ -8,16 +8,16 @@
 
 | Regra | Tema | Quem verifica (função Python / agente / humano) | Por quê | Onde foi implementada (preencha na Etapa 11) |
 |---|---|---|---|---|
-| N1 | férias | | | |
-| N2 | férias | | | |
-| N3 | férias | | | |
-| N4 | prazos | | | |
-| N5 | escala | | | |
-| N6 | abono | | | |
-| N7 | diária | | | |
-| N8 | aprovação | | | |
-| N9 | saúde | | | |
-| N10 | dados | | | |
+| N1 | férias | Função python | Verifica se o período é igual ou maior que 5 | |
+| N2 | férias | Função python | É uma conta para verificada vendidos e saldo via IF | |
+| N3 | férias | Função python | É um requisito que uma função python consegue assegurar | |
+| N4 | prazos | Função python | Basta ifs para analisar diferença de datas | |
+| N5 | escala | Função python | Analisa o limite de 30% facilmente usando if | |
+| N6 | abono | Função python | Basta usar if para checar dia útil e saldo de abonos | |
+| N7 | diária | Agente financeiro | É um calculo, mas o enunciado pede agente com tools | |
+| N8 | aprovação | Humano | Decisão de uma pessoa | |
+| N9 | saúde | Guardrail + agente classificador | Buscar padrão do CID e perceber o assunto | |
+| N10 | dados | Função python | Dá para detector via função pois CPF e CID possuem formato fixo. | |
 
 ## Etapa 11: os 12 casos
 
@@ -78,17 +78,3 @@ Compare **caminho e estado**, não o texto do despacho.
 | Arquivo / trecho | Exemplo das aulas em que me baseei | O que precisei adaptar |
 |---|---|---|
 | | | |
-
-
-| Regra | Tema | Quem verifica (função Python / agente / humano) | Por quê | Onde foi implementada (preencha na Etapa 11) |
-|---|---|---|---|---|
-| N1 | férias | função Python | conta: dias corridos >= 5 e <= saldo | |
-| N2 | férias | função Python | conta: dias + vendidos <= saldo, vendidos <= 10 | |
-| N3 | férias | função Python | consulta de calendário (feriados e fim de semana) | |
-| N4 | prazos | função Python | diferença entre datas (dias corridos ou úteis) | |
-| N5 | escala | função Python | contagem de afastados da equipe no período x limite de 30% | |
-| N6 | abono | função Python | dia útil e saldo de abonos | |
-| N7 | diária | função Python | conta (diárias + meia diária, câmbio); o agente Financeiro só explica | |
-| N8 | aprovação | humano | é decisão da chefia; o server só confere se o aprovador é a chefia certa | |
-| N9 | saúde | função Python (guardrail) | regex de CID/CPF barra antes de qualquer agente ver o texto; o classificador (agente) cobre o que a regex não pega | |
-| N10 | dados | função Python (guardrail de saída) | regex no despacho antes de gravar | |
