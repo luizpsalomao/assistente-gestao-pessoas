@@ -35,8 +35,17 @@ MODELO = configurar()  # LLM REAL: PROVEDOR no .env (openai ou ollama)
 #   Referência: exercicios_resolvidos/aula4/ex10_function_tool.py (consultar_protocolo)
 @function_tool
 def consultar_servidor(matricula: str) -> str:
-    """TODO: escreva a docstring (o que a tool faz e o que é o argumento)."""
-    raise NotImplementedError("ETAPA 1.1: consultar_servidor")
+    """Consulta o cadastro de UM servidor pela matrícula: nome, cargo, equipe, saldo de férias (dias),
+    abonos restantes e matrícula da chefia imediata. Não devolve o salário.
+
+    Use SOMENTE quando a pergunta for sobre os dados de um servidor específico (ex.: "quantos dias de férias
+    a matrícula 1002 tem?"). NÃO use para dúvidas gerais sobre as normas ou conceitos (ex.: "o que é abono?").
+
+    Args:
+        matricula: matrícula do servidor, só os dígitos (ex.: "1002").
+    """
+    print("[tool] consultar_servidor", matricula)
+    return json.dumps(servidor_publico(matricula), ensure_ascii=False)
 
 
 def criar_atendente() -> Agent:
@@ -45,7 +54,16 @@ def criar_atendente() -> Agent:
     #   Instruções: atende servidores, responde em português e de forma breve, usa a tool quando a pergunta
     #   for sobre os dados de UM servidor, e não inventa saldo de cabeça.
     #   Referência: aula1/segundo_agente.py
-    raise NotImplementedError("ETAPA 1.2: criar_atendente")
+    return Agent(
+        name="AtendenteRH",
+        instructions=(
+            "Você é o atendente do RH e tira dúvidas dos servidores. Responda em português, de forma breve "
+            "(no máximo 2 frases). Use a tool consultar_servidor apenas quando a pergunta for sobre os dados de "
+            "UM servidor (saldo de férias, abonos, equipe, chefia). Para dúvidas gerais ou conceitos, responda "
+            "direto, sem chamar a tool. Nunca invente saldo ou dado de cadastro: se não souber, consulte a tool."
+        ),
+        tools=[consultar_servidor],
+    )
 
 
 def main() -> None:
@@ -53,7 +71,10 @@ def main() -> None:
     #   1) "Quantos dias de férias a matrícula 1002 ainda tem?"   (precisa da tool)
     #   2) "O que é abono pecuniário?"                            (não precisa)
     #   Referência: aula8/exemplos/02_agente_tool/main.py
-    raise NotImplementedError("ETAPA 1.3: main")
+    atendente = criar_atendente()
+    for pergunta in ("Quantos dias de férias a matrícula 1002 ainda tem?", "O que é abono pecuniário?"):
+        resultado = Runner.run_sync(atendente, pergunta)
+        print(resultado.final_output)
 
 
 if __name__ == "__main__":
