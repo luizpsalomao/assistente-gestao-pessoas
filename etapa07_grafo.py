@@ -65,7 +65,10 @@ from dados_rh import SAIDAS
 from etapa02_extracao import extrair, extrair_com_votacao
 from etapa04_ferramentas import gerar_protocolo, rodar_com_limites_sync, texto_hoje
 from etapa03_guardrails import LIMIAR, MENSAGENS, encontrar_dado_sensivel, nota_escopo
+from etapa10_governanca import Governanca
 from etapa10_observabilidade import medido
+import etapa02_extracao
+import etapa03_guardrails
 from provedor import configurar
 from etapa06_regras import precisa_chefia, resumo_periodo, violacoes_objetivas
 
@@ -107,6 +110,12 @@ class Estado(TypedDict, total=False):
     protocolo: str
     resultado: str                # o desfecho, para a tabela da Etapa 11
     caminho: Annotated[list[str], operator.add]   # cada nó só ACRESCENTA o próprio nome
+    # ETAPA 10 (observabilidade): o medido() lê estes campos do que cada nó devolve. Com reducer porque os três
+    # especialistas escrevem no MESMO passo (sem ele: InvalidUpdateError, como no experimento da 7.1).
+    tokens: Annotated[int, operator.add]          # tokens gastos pelo nó (somados no estado)
+    eventos: Annotated[list[dict], operator.add]  # tools chamadas por cada agente (hook Governanca, 10.1)
+    fonte_feriados: str                           # "brasilapi", "arquivo_local" ou "indisponivel"
+    cambio_api: bool                              # a cotação do dólar veio da API?
 
 
 # ------------------------------------------------------------------ nós PRONTOS
@@ -141,11 +150,13 @@ def proteger_entrada(estado: Estado) -> dict:
     achado = encontrar_dado_sensivel(texto)  # regex primeiro: o dado sensível não chega ao LLM
     if achado:
         return {"bloqueado": True, "motivo_bloqueio": MENSAGENS[achado], "caminho": ["proteger_entrada"]}
+    etapa03_guardrails.ULTIMO_USO["tokens"] = 0
     nota, _motivo = nota_escopo(texto)
+    tokens = etapa03_guardrails.ULTIMO_USO["tokens"]
     if nota >= LIMIAR:
         return {"bloqueado": True, "motivo_bloqueio": MENSAGENS["fora_do_escopo"], "nota_escopo": nota,
-                "caminho": ["proteger_entrada"]}
-    return {"bloqueado": False, "nota_escopo": nota, "caminho": ["proteger_entrada"]}
+                "tokens": tokens, "caminho": ["proteger_entrada"]}
+    return {"bloqueado": False, "nota_escopo": nota, "tokens": tokens, "caminho": ["proteger_entrada"]}
 
 
 def rotear_entrada(estado: Estado) -> str:
@@ -174,12 +185,14 @@ def no_extrair(estado: Estado) -> dict:
     #   🆕 A (opcional) -- se USAR_VOTACAO: pedido, divergencia, votos = asyncio.run(extrair_com_votacao(texto))
     #   Devolva {"pedido": pedido.model_dump(mode="json"), "divergencia": ..., "caminho": ["extrair"]}
     divergencia = False
+    etapa02_extracao.ULTIMO_USO["tokens"] = 0
     if USAR_VOTACAO:
         import asyncio
         pedido, divergencia, _votos = asyncio.run(extrair_com_votacao(estado["texto"]))
     else:
         pedido = extrair(estado["texto"])
-    return {"pedido": pedido.model_dump(mode="json"), "divergencia": divergencia, "caminho": ["extrair"]}
+    return {"pedido": pedido.model_dump(mode="json"), "divergencia": divergencia,
+            "tokens": etapa02_extracao.ULTIMO_USO["tokens"], "caminho": ["extrair"]}
 
 
 def rotear_extracao(estado: Estado) -> str:
@@ -212,7 +225,8 @@ def calcular_periodo(estado: Estado) -> dict:
     periodo = resumo_periodo(pedido["data_inicio"], pedido["data_fim"])
     escala = chamar_mcp("consultar_escala", {"equipe": servidor["equipe"], "inicio": pedido["data_inicio"],
                                              "fim": pedido["data_fim"]})
-    return {"periodo": periodo, "escala": escala, "caminho": ["calcular_periodo"]}
+    return {"periodo": periodo, "escala": escala, "fonte_feriados": periodo["fonte_feriados"],
+            "caminho": ["calcular_periodo"]}
 
 
 # ------------------------------------------------------------------ ETAPA 7.3: paralelismo
@@ -226,16 +240,16 @@ def no_normas(estado: Estado) -> dict:
     # ETAPA 7.3 -- rode agentes.criar_normas() com rodar_com_limites_sync(_fatos(estado)) e escreva SÓ
     #   {"parecer_normas": ..., "caminho": ["normas"]}. Os três especialistas rodam no MESMO passo.
     #   Referência: aula7/exemplos/08_paralelismo/main.py (cada ramo escreve no SEU campo)
-    resultado = rodar_com_limites_sync(agentes.criar_normas(), _entrada_especialista(estado))
-    return {"parecer_normas": resultado.final_output, "caminho": ["normas"]}
+    parecer, metricas = _rodar_agente(agentes.criar_normas(), _entrada_especialista(estado))
+    return {"parecer_normas": parecer, **metricas, "caminho": ["normas"]}
 
 
 def no_escala(estado: Estado) -> dict:
     # ETAPA 7.3 -- idem, agentes.criar_escala() -> {"parecer_escala": ..., "caminho": ["escala"]}
     if estado["pedido"]["tipo"] == "diaria":  # diária não afasta o servidor da escala (N5 não se aplica)
         return {"parecer_escala": "não se aplica (diária não afasta o servidor da escala)", "caminho": ["escala"]}
-    resultado = rodar_com_limites_sync(agentes.criar_escala(), _entrada_especialista(estado))
-    return {"parecer_escala": resultado.final_output, "caminho": ["escala"]}
+    parecer, metricas = _rodar_agente(agentes.criar_escala(), _entrada_especialista(estado))
+    return {"parecer_escala": parecer, **metricas, "caminho": ["escala"]}
 
 
 def no_financeiro(estado: Estado) -> dict:
@@ -244,8 +258,19 @@ def no_financeiro(estado: Estado) -> dict:
     pedido = estado["pedido"]
     if pedido["tipo"] != "diaria" and not pedido.get("dias_vendidos"):  # abono, ou férias sem venda: nada a pagar
         return {"parecer_financeiro": "não se aplica (sem venda de férias nem diária)", "caminho": ["financeiro"]}
-    resultado = rodar_com_limites_sync(agentes.criar_financeiro(), _entrada_especialista(estado))
-    return {"parecer_financeiro": resultado.final_output, "caminho": ["financeiro"]}
+    parecer, metricas = _rodar_agente(agentes.criar_financeiro(), _entrada_especialista(estado))
+    saida = {"parecer_financeiro": parecer, **metricas, "caminho": ["financeiro"]}
+    cotacoes = [e["resultado"] for e in metricas["eventos"] if e.get("tool") == "cotacao_dolar"]
+    if cotacoes:  # só a diária no exterior consulta o câmbio
+        saida["cambio_api"] = cotacoes[-1] != "indisponível"
+    return saida
+
+
+def _rodar_agente(agente, entrada: str) -> tuple[str, dict]:
+    """Roda um agente com o hook Governanca (Etapa 10.1) e devolve (texto, métricas para o estado)."""
+    hooks = Governanca(verbose=False)
+    resultado = rodar_com_limites_sync(agente, entrada, hooks=hooks)
+    return resultado.final_output, {"tokens": resultado.context_wrapper.usage.total_tokens, "eventos": hooks.eventos}
 
 
 def _entrada_especialista(estado: Estado) -> str:
@@ -282,8 +307,8 @@ def redigir_despacho(estado: Estado) -> dict:
         entrada += f"\nFEEDBACK DA VALIDAÇÃO (corrija): {estado['erro_validacao']}"
     if estado.get("feedback_chefia"):
         entrada += f"\nFEEDBACK DA CHEFIA (reescreva levando isto em conta): {estado['feedback_chefia']}"
-    despacho = rodar_com_limites_sync(agentes.criar_redator(), entrada).final_output
-    return {"despacho": despacho, "caminho": ["redigir_despacho"]}
+    despacho, metricas = _rodar_agente(agentes.criar_redator(), entrada)
+    return {"despacho": despacho, **metricas, "caminho": ["redigir_despacho"]}
 
 
 def problemas_do_despacho(despacho: str, pedido: dict) -> list[str]:

@@ -88,8 +88,12 @@ def criar_classificador() -> Agent:
 
 def nota_escopo(texto: str) -> tuple[float, str]:
     # ETAPA 3.3 -- rode o classificador (Runner.run_sync) e devolva (nota, motivo)
-    avaliacao = Runner.run_sync(criar_classificador(), texto).final_output
-    return avaliacao.nota, avaliacao.motivo
+    resultado = Runner.run_sync(criar_classificador(), texto)
+    ULTIMO_USO["tokens"] = resultado.context_wrapper.usage.total_tokens  # para a observabilidade (Etapa 10)
+    return resultado.final_output.nota, resultado.final_output.motivo
+
+
+ULTIMO_USO = {"tokens": 0}  # tokens da última classificação (o nó proteger_entrada do grafo lê daqui)
 
 
 # ETAPA 3.4 -- os dois guardrails. Cada um devolve GuardrailFunctionOutput(output_info=..., tripwire_triggered=...)
