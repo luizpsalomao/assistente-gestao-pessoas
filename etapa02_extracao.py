@@ -70,27 +70,48 @@ class Pedido(BaseModel):
     tipo: TipoPedido = Field(description=(
         "Tipo do pedido: 'ferias' (descanso anual, pode incluir venda de dias), 'abono' (folga de 1 dia útil), "
         "'diaria' (viagem a serviço), 'licenca_saude' (afastamento por doença) ou 'outro'."))
+    matricula: str | None = Field(default=None, description=(
+        "Matrícula do servidor, 4 dígitos (ex.: '1002'), exatamente como escrita no texto. "
+        "null se o servidor não informou a matrícula: nunca invente."))
+    data_inicio: str | None = Field(default=None, description=(
+        "Primeiro dia do pedido, no formato AAAA-MM-DD. Só preencha se o servidor disse o DIA exato; "
+        "'em agosto', 'perto da Páscoa' ou 'semana que vem' NÃO são datas exatas: use null."))
+    data_fim: str | None = Field(default=None, description=(
+        "Último dia do pedido, no formato AAAA-MM-DD. No abono (1 dia), igual à data_inicio. "
+        "null se o servidor não disse o dia exato."))
+    dias_vendidos: int = Field(default=0, ge=0, le=10, description=(
+        "Dias de férias que o servidor quer VENDER (abono pecuniário, regra N2), de 0 a 10. "
+        "Só preencha se ele pediu explicitamente para vender um número de dias; caso contrário, 0."))
+    destino: str | None = Field(default=None, description=(
+        "Só para diária: a cidade da viagem a serviço (ex.: 'Buenos Aires'). null nos demais tipos."))
+    tipo_destino: TipoDestino | None = Field(default=None, description=(
+        "Só para diária: 'capital' (capital brasileira), 'interior' (outra cidade do Brasil) ou 'exterior' "
+        "(fora do Brasil). null nos demais tipos."))
+    justificativa: str = Field(default="", description=(
+        "Resumo curto do motivo do pedido, em uma frase. NUNCA inclua CPF, CID ou detalhes de saúde (regra N10)."))
 
 
 def criar_extrator(instrucoes: str, input_guardrails: list | None = None) -> Agent:
     # ETAPA 2.2 -- devolva Agent(name="Extrator", instructions=instrucoes, output_type=Pedido,
     #   input_guardrails=input_guardrails or [])
     #   (os guardrails só entram na Etapa 3; até lá, a lista fica vazia)
-    raise NotImplementedError("ETAPA 2.2: criar_extrator")
+    return Agent(name="Extrator", instructions=instrucoes, output_type=Pedido,
+                 input_guardrails=input_guardrails or [])
 
 
 INSTRUCOES_EXTRATOR = (
     f"Hoje é {texto_hoje()}. "  # (PRONTO) a data real: o modelo não tem relógio (aula3/agente_retry.py)
     "Você extrai pedidos de servidores para o RH (férias, abono ou diária). "
-    "TODO ETAPA 2.2: complete -- datas no formato AAAA-MM-DD, não invente o que não foi dito (use null), "
-    "dias vendidos só se o servidor pedir explicitamente."
+    "Preencha os campos só com o que está escrito no texto. Datas sempre no formato AAAA-MM-DD, e só quando o "
+    "servidor disse o dia exato. Não invente nada que não foi dito: matrícula, datas ou destino ausentes ficam null. "
+    "Dias vendidos só se o servidor pedir explicitamente para vender; caso contrário, 0."
 )
 
 
 def extrair(texto: str) -> Pedido:
     # ETAPA 2.3 -- rode criar_extrator(INSTRUCOES_EXTRATOR) com Runner.run_sync e devolva final_output
     #   (é um objeto Pedido, não texto!)
-    raise NotImplementedError("ETAPA 2.3: extrair")
+    return Runner.run_sync(criar_extrator(INSTRUCOES_EXTRATOR), texto).final_output
 
 
 # ------------------------------------------------------------------ 🆕 A: votação (OPCIONAL, bônus)
