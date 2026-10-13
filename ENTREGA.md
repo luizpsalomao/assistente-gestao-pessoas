@@ -14,7 +14,7 @@
 | N4 | prazos | Função python | Basta ifs para analisar diferença de datas | |
 | N5 | escala | Função python | Analisa o limite de 30% facilmente usando if | |
 | N6 | abono | Função python | Basta usar if para checar dia útil e saldo de abonos | |
-| N7 | diária | Agente financeiro | É um calculo, mas o enunciado pede agente com tools | |
+| N7 | diária | Função python | É um calculo | |
 | N8 | aprovação | Humano | Decisão de uma pessoa | |
 | N9 | saúde | Guardrail + agente classificador | Buscar padrão do CID e perceber o assunto | |
 | N10 | dados | Função python | Dá para detector via função pois CPF e CID possuem formato fixo. | |
