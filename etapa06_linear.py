@@ -29,7 +29,7 @@ import etapa06_agentes as agentes
 from etapa05_cliente_mcp import chamar_mcp
 from dados.casos import CASOS
 from etapa02_extracao import extrair
-from etapa04_ferramentas import gerar_protocolo, rodar_com_limites_sync
+from etapa04_ferramentas import gerar_protocolo, rodar_com_limites_sync, texto_hoje
 from etapa10_governanca import Governanca, LimiteExcedido
 from etapa03_guardrails import encontrar_dado_sensivel, nota_escopo, LIMIAR, MENSAGENS
 from provedor import configurar
@@ -41,7 +41,18 @@ MODELO = configurar()
 def analisar(pedido: dict, servidor: dict, periodo: dict, violacoes: list[str], hooks: RunHooks | None = None) -> str:
     # ETAPA 6.3 -- monte um texto com o pedido, o servidor (matrícula e equipe), o período e as violações objetivas,
     #   e rode criar_coordenador(hooks) com rodar_com_limites_sync(..., hooks=hooks). Devolva final_output.
-    raise NotImplementedError("ETAPA 6.3: analisar")
+    entrada = (
+        f"Data do pedido (hoje): {texto_hoje()}\n"
+        f"Pedido: {json.dumps(pedido, ensure_ascii=False)}\n"
+        f"Servidor (cadastro, sem salário): {json.dumps(servidor, ensure_ascii=False)}\n"
+        f"Período: {json.dumps(periodo, ensure_ascii=False)}\n"
+        f"Violações objetivas (calculadas em Python): {violacoes or 'nenhuma'}"
+    )
+    resultado = rodar_com_limites_sync(agentes.criar_coordenador(hooks), entrada, hooks=hooks)
+    # quem o Coordenador consultou: as chamadas de tool (os especialistas) que aparecem em new_items
+    consultados = [item.raw_item.name for item in resultado.new_items if item.type == "tool_call_item"]
+    print(f"      coordenador consultou: {', '.join(consultados) or 'ninguém'}")
+    return resultado.final_output
 
 
 def processar(texto: str, hooks: RunHooks | None = None) -> dict:
@@ -58,7 +69,75 @@ def processar(texto: str, hooks: RunHooks | None = None) -> dict:
     #        "aprovador": "pendente_chefia" se precisa_chefia(...) senão "sistema", "token": os.getenv("TOKEN_REGISTRO")})
     #      (a aprovação de verdade da chefia entra na Etapa 8; aqui só marcamos que ela será necessária)
     #   Devolva {"resultado": ..., "protocolo": ..., "despacho": ..., "parecer": ...}.
-    raise NotImplementedError("ETAPA 6.4: processar")
+    # 1. guardrails (regex primeiro, sem LLM; depois o classificador)
+    print("[1/9] guardrails")
+    achado = encontrar_dado_sensivel(texto)
+    if achado:
+        return {"resultado": "bloqueado", "mensagem": MENSAGENS[achado]}
+    nota, motivo = nota_escopo(texto)
+    if nota >= LIMIAR:
+        return {"resultado": "bloqueado", "mensagem": MENSAGENS["fora_do_escopo"], "nota": nota, "motivo": motivo}
+
+    # 2. extração estruturada (Etapa 2)
+    pedido = extrair(texto).model_dump(mode="json")
+    print(f"[2/9] extração: {pedido['tipo']} {pedido['matricula']} {pedido['data_inicio']}..{pedido['data_fim']}")
+    if not (pedido["matricula"] and pedido["data_inicio"] and pedido["data_fim"]):
+        return {"resultado": "pedir_dados", "mensagem": "Informe a matrícula e as datas exatas (dia/mês/ano).",
+                "pedido": pedido}
+
+    # 3. cadastro pelo MCP (Etapa 5)
+    servidor = chamar_mcp("consultar_servidor", {"matricula": pedido["matricula"]})
+    if "erro" in servidor:
+        return {"resultado": "pedir_dados", "mensagem": f"Matrícula {pedido['matricula']} não encontrada."}
+    print(f"[3/9] servidor: {servidor['nome']} ({servidor['equipe']})")
+
+    # 4. período com a API de feriados (Etapa 4)
+    periodo = resumo_periodo(pedido["data_inicio"], pedido["data_fim"])
+    print(f"[4/9] período: {periodo['dias_uteis']} dia(s) útil(eis), retorno {periodo['retorno']} "
+          f"(fonte: {periodo['fonte_feriados']})")
+
+    # 5. escala pelo MCP + regras objetivas em Python (Etapa 6.0)
+    escala = chamar_mcp("consultar_escala", {"equipe": servidor["equipe"], "inicio": pedido["data_inicio"],
+                                             "fim": pedido["data_fim"]})
+    violacoes = violacoes_objetivas(pedido, servidor, periodo, escala)
+    print(f"[5/9] violações: {violacoes or 'nenhuma'}")
+
+    # 6. coordenador com os especialistas como tools
+    print("[6/9] coordenador")
+    parecer = analisar(pedido, servidor, periodo, violacoes, hooks)
+
+    # 7. redator: escreve o despacho só com os fatos
+    print("[7/9] redator")
+    decisao = "indeferido" if violacoes else "deferido"
+    chefia = precisa_chefia(pedido, violacoes)
+    fatos = (
+        f"Decisão: {decisao.upper()}\n"
+        f"Data do pedido (hoje): {texto_hoje()}\n"
+        f"Pedido: {json.dumps(pedido, ensure_ascii=False)}\n"
+        f"Servidor (cadastro, sem salário): {json.dumps(servidor, ensure_ascii=False)}\n"
+        f"Período: {json.dumps(periodo, ensure_ascii=False)}\n"
+        f"Violações objetivas: {violacoes or 'nenhuma'}\n"
+        f"Precisa da aprovação da chefia (N8): {'sim, chefia ' + str(servidor['chefia']) if chefia else 'não'}\n"
+        f"Parecer da equipe de especialistas:\n{parecer}"
+    )
+    despacho = rodar_com_limites_sync(agentes.criar_redator(), fatos, hooks=hooks).final_output
+
+    # 8. protocolo idempotente (Etapa 4)
+    protocolo = gerar_protocolo(pedido["matricula"], pedido["tipo"], pedido["data_inicio"], pedido["data_fim"])
+    print(f"[8/9] protocolo {protocolo}")
+
+    # 9. registrar pelo MCP (quem grava é o código, nunca um agente)
+    registro = chamar_mcp("registrar_decisao", {
+        "protocolo": protocolo, "matricula": pedido["matricula"], "tipo": pedido["tipo"],
+        "inicio": pedido["data_inicio"], "fim": pedido["data_fim"], "decisao": decisao,
+        "aprovador": "pendente_chefia" if chefia else "sistema", "despacho": despacho,
+        "token": os.getenv("TOKEN_REGISTRO", ""), "thread_id": "linear"})
+    print(f"[9/9] registrar: {registro}")
+    if not registro.get("sucesso"):
+        resultado = "negado_pelo_server"
+    else:
+        resultado = "duplicado" if registro.get("duplicado") else "registrado"
+    return {"resultado": resultado, "protocolo": protocolo, "despacho": despacho, "parecer": parecer}
 
 
 def testar_governanca() -> None:
