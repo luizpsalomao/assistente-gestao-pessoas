@@ -2,7 +2,7 @@
 
 Um sistema que recebe pedidos de férias, abonos e diárias em texto livre, protege a entrada, extrai os dados, consulta um
 MCP Server, analisa com especialistas, pede a aprovação da chefia e registra a decisão com auditoria. Ele usa o conteúdo das
-Aulas 1 a 9.
+Aulas 1 a 9, organizados no material da aula 10.
 
 | Arquivo | Para quê |
 |---|---|
